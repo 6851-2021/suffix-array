@@ -5,11 +5,6 @@
 #include <string>
 #include <vector>
 
-struct SuffixArray {
-    std::vector<unsigned> ind;
-    std::vector<unsigned> lcp;
-};
-
 //
 // Naive algorithm
 //
@@ -32,21 +27,14 @@ struct SuffixComparator {
     }
 };
 
-SuffixArray compute_naive(const std::vector<unsigned> &s) {
-    SuffixArray res;
-
-    res.ind.resize(s.size());
+std::vector<unsigned> naive_sa(const std::vector<unsigned> &s) {
+    std::vector<unsigned> ord(s.size());
     for (unsigned i = 0;i < s.size();i++) {
-        res.ind[i] = i;
+        ord[i] = i;
     }
     SuffixComparator cmp(s);
-    std::sort(res.ind.begin(), res.ind.end(), cmp);
-
-    res.lcp.resize(s.size() - 1);
-    for (unsigned i = 0;i + 1 < s.size();i++) {
-        res.lcp[i] = naive_lcp(s, res.ind[i], res.ind[i + 1]);
-    }
-    return res;
+    std::sort(ord.begin(), ord.end(), cmp);
+    return ord;
 }
 
 //
@@ -98,15 +86,18 @@ void radix_sort(
     }
 
     for (unsigned i = K - 1;i < K;i--) {
-        // TODO see if it makes sense to just skip the first iteration
-        bPtr.resize(v.size());
+        unsigned maxX = 0;
+        for (const auto &x : v) {
+            maxX = std::max(maxX, x[i]);
+        }
+        bPtr.resize(maxX + 1);
         std::fill(bPtr.begin(), bPtr.end(), 0);
         for (const auto &x : v) {
             bPtr[x[i]]++;
         }
 
         unsigned prefSum = 0;
-        for (unsigned j = 0;j < v.size();j++) {
+        for (unsigned j = 0;j < bPtr.size();j++) {
             unsigned newSum = prefSum + bPtr[j];
             bPtr[j] = prefSum;
             prefSum = newSum;
@@ -150,13 +141,12 @@ void get_rank(
 // NlogN
 //
 
-SuffixArray compute_nlogn(const std::vector<unsigned> &input) {
+std::vector<unsigned> nlogn_sa(const std::vector<unsigned> &input) {
     static std::vector<std::array<unsigned, 2>> sortArr;
     static std::vector<unsigned> rank;
 
-    SuffixArray sa;
-    sa.ind = sort_chars(input);
-    get_rank(input, sa.ind, rank);
+    std::vector<unsigned> ord = sort_chars(input);
+    get_rank(input, ord, rank);
 
     for (unsigned stride = 1;stride < input.size();stride *= 2) {
         //std::cerr << "before stride=" << stride << "\n";
@@ -171,11 +161,150 @@ SuffixArray compute_nlogn(const std::vector<unsigned> &input) {
             sortArr[i][0] = rank[i];
             sortArr[i][1] = rank[j];
         }
-        radix_sort(sortArr, sa.ind);
-        get_rank(sortArr, sa.ind, rank);
+        radix_sort(sortArr, ord);
+        get_rank(sortArr, ord, rank);
     }
-    return sa;
+    return ord;
 }
+
+//
+// Linear
+//
+
+unsigned mod_prefix_cnt(unsigned n, unsigned mod) {
+    return n / 3 + (n % 3 > mod);
+}
+
+std::vector<unsigned> get_v01_letter_rank(const std::vector<unsigned> &v) {
+    const unsigned v01_cnt = v.size() - mod_prefix_cnt(v.size(), 2);
+    std::vector<std::array<unsigned, 3>> v01_letters;
+    v01_letters.reserve(v01_cnt);
+
+    for (unsigned m = 0;m < 2;m++) {
+        for (unsigned i = m;i < v.size();i += 3) {
+            std::array<unsigned, 3> cur{};
+            for (unsigned j = 0;j < 3;j++) {
+                if (i + j < v.size()) {
+                    cur[j] = v[i + j];
+                }
+            }
+            v01_letters.push_back(cur);
+        }
+    }
+    // Compress letters
+    std::vector<unsigned> v01_letters_ord;
+    radix_sort(v01_letters, v01_letters_ord);
+    std::vector<unsigned> v01_rank;
+    get_rank(v01_letters, v01_letters_ord, v01_rank);
+
+    return v01_rank;
+}
+
+std::vector<unsigned> get_v2_ord(
+    const std::vector<unsigned> &v,
+    const std::vector<unsigned> &v0_rank
+) {
+    std::vector<std::array<unsigned, 2>> v2_letters;
+    v2_letters.reserve(mod_prefix_cnt(v.size(), 2));
+
+    for (unsigned i = 2;i < v.size();i += 3) {
+        std::array<unsigned, 2> cur{};
+        cur[0] = v[i];
+
+        unsigned j = (i + 1) / 3;
+        if (j < v0_rank.size()) {
+            cur[1] = v0_rank[j];
+        } else {
+            cur[1] = 0; // end of string
+        }
+
+        v2_letters.push_back(cur);
+    }
+
+    std::vector<unsigned> v2_ord;
+    radix_sort(v2_letters, v2_ord);
+    return v2_ord;
+}
+
+unsigned get_or_0(const std::vector<unsigned> &v, unsigned i) {
+    return i < v.size() ? v[i] : 0;
+}
+
+std::vector<unsigned> linear_sa(const std::vector<unsigned> &v) {
+    //std::cerr << "linear_sa on " << v << "\n";
+    if (v.size() < 3) {
+        auto ord = naive_sa(v);
+        //std::cerr << "naive: " << ord << "\n";
+        return ord;
+    }
+
+    std::vector<unsigned> v01_letter_rank = get_v01_letter_rank(v);
+    std::vector<unsigned> v01_ord = linear_sa(v01_letter_rank);
+
+    std::vector<unsigned> v0_rank(mod_prefix_cnt(v.size(), 0));
+    std::vector<unsigned> v1_rank(mod_prefix_cnt(v.size(), 1));
+    for (unsigned i = 0;i < v01_ord.size();i++) {
+        unsigned j = v01_ord[i];
+        if (j < v0_rank.size()) {
+            v0_rank[j] = i;
+            v01_ord[i] = 3 * j;
+        } else {
+            j -= v0_rank.size();
+            v1_rank[j] = i;
+            v01_ord[i] = 3 * j + 1;
+        }
+    }
+    //std::cerr << "v0_rank " << v0_rank << " v1_rank " << v1_rank << "\n";
+
+    std::vector<unsigned> v2_ord = get_v2_ord(v, v0_rank);
+    std::vector<unsigned> v2_rank(v2_ord.size());
+    for (unsigned i = 0;i < v2_ord.size();i++) {
+        v2_rank[v2_ord[i]] = i;
+    }
+
+    std::vector<unsigned> ord;
+    ord.reserve(v.size());
+
+    unsigned v01_i = 0;
+    unsigned v2_i = 0;
+    while ((v01_i < v01_ord.size()) && (v2_i < v2_ord.size())) {
+        unsigned j = v2_ord[v2_i];
+        unsigned i = v01_ord[v01_i] / 3;
+        bool lt;
+
+        if (v01_ord[v01_i] % 3 == 0) {
+            if (get_or_0(v, 3 * i) != get_or_0(v, 3 * j + 2)) {
+                lt = get_or_0(v, 3 * i) < get_or_0(v, 3 * j + 2);
+            } else {
+                lt = get_or_0(v1_rank, i) < get_or_0(v0_rank, j + 1);
+            }
+        } else {
+            if (get_or_0(v, 3 * i + 1) != get_or_0(v, 3 * j + 2)) {
+                lt = get_or_0(v, 3 * i + 1) < get_or_0(v, 3 * j + 2);
+            } else if (get_or_0(v, 3 * i + 2) != get_or_0(v, 3 * j + 3)) {
+                lt = get_or_0(v, 3 * i + 2) < get_or_0(v, 3 * j + 3);
+            } else {
+                lt = get_or_0(v0_rank, i + 1) < get_or_0(v1_rank, j + 1);
+            }
+        }
+        if (lt) {
+            ord.push_back(v01_ord[v01_i++]);
+        } else {
+            ord.push_back(v2_ord[v2_i++] * 3 + 2);
+        }
+    }
+
+    while (v01_i < v01_ord.size()) {
+        ord.push_back(v01_ord[v01_i++]);
+    }
+
+    while (v2_i < v2_ord.size()) {
+        ord.push_back(v2_ord[v2_i++] * 3 + 2);
+    }
+    //std::cerr << "done with " << v << ": " << ord << "\n";
+    return ord;
+}
+
 
 
 //
@@ -271,11 +400,6 @@ std::vector<unsigned> read_input() {
     return res;
 }
 
-void print_arr(const SuffixArray &arr) {
-    std::cout << arr.ind << "\n";
-    //std::cout << arr.lcp << "\n";
-}
-
 int main(int argc, char* argv[]) {
     std::ios::sync_with_stdio(false);
     std::cin.tie(nullptr);
@@ -285,19 +409,21 @@ int main(int argc, char* argv[]) {
 
     std::vector<unsigned> input = read_input();
 
-    SuffixArray arr;
+    std::vector<unsigned> sa;
     for (unsigned i = 0;i < opt.repeatCnt;i++) {
         switch(opt.algorithm) {
         case NAIVE:
-            arr = compute_naive(input);
+            sa = naive_sa(input);
             break;
         case NLOGN:
-            arr = compute_nlogn(input);
+            sa = nlogn_sa(input);
             break;
         default:
+            sa = linear_sa(input);
+            break;
             std::cerr << "Algorithm not yet supported\n";
             std::exit(1);
         }
     }
-    print_arr(arr);
+    std::cout << sa << "\n";
 }
