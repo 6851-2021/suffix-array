@@ -1,14 +1,79 @@
 #include <algorithm>
 #include <array>
 #include <iostream>
+#include <cstdio>
 #include <map>
+#include <cassert>
 #include <string>
 #include <vector>
+
+
+class Span {
+private:
+    unsigned *base;
+    unsigned len;
+
+public:
+    static Span make(unsigned len) {
+        return Span(new unsigned[len], len);
+    }
+
+    Span(unsigned *base = nullptr, unsigned len = 0): base(base), len(len) {}
+    void free() {
+        if (base != nullptr) {
+            delete[] base;
+        }
+        base = nullptr;
+        len = 0;
+    }
+
+    const unsigned* get_buffer() const {
+        return base;
+    }
+
+    Span slice(unsigned startI, unsigned endI) {
+        return Span(base + startI, endI - startI);
+    }
+    const Span slice(unsigned startI, unsigned endI) const {
+        return Span(base + startI, endI - startI);
+    }
+
+    unsigned& operator[](unsigned i) {
+        return base[i];
+    }
+    const unsigned& operator[](unsigned i) const {
+        return base[i];
+    }
+    size_t size() const {
+        return len;
+    }
+
+    unsigned* begin() {
+        return base;
+    }
+    const unsigned* begin() const {
+        return base;
+    }
+    unsigned* end() {
+        return base + len;
+    }
+    const unsigned* end() const {
+        return base + len;
+    }
+};
+
+std::ostream& operator<<(std::ostream &s, const Span span) {
+    for (const unsigned &x : span) {
+        s << x << " ";
+    }
+    return s;
+}
+
 
 //
 // Naive algorithm
 //
-unsigned naive_lcp(const std::vector<unsigned> &s, unsigned i, unsigned j) {
+unsigned naive_lcp(const Span s, unsigned i, unsigned j) {
     unsigned l=0;
     while (s[i + l] == s[j + l]) {
         l++;
@@ -17,9 +82,9 @@ unsigned naive_lcp(const std::vector<unsigned> &s, unsigned i, unsigned j) {
 }
 
 struct SuffixComparator {
-    const std::vector<unsigned> &s;
+    const Span s;
 
-    SuffixComparator(const std::vector<unsigned> &s): s(s) {}
+    SuffixComparator(const Span s): s(s) {}
 
     bool operator() (unsigned i, unsigned j) {
         unsigned l = naive_lcp(s, i, j);
@@ -27,8 +92,8 @@ struct SuffixComparator {
     }
 };
 
-std::vector<unsigned> naive_sa(const std::vector<unsigned> &s) {
-    std::vector<unsigned> ord(s.size());
+Span naive_sa(const Span s) {
+    Span ord = Span::make(s.size());
     for (unsigned i = 0;i < s.size();i++) {
         ord[i] = i;
     }
@@ -49,25 +114,37 @@ std::ostream& operator<<(std::ostream &s, const std::vector<T> &v) {
     return s;
 }
 
-std::vector<unsigned> sort_chars(const std::vector<unsigned> &s) {
-    std::map<unsigned, unsigned> charPtr;
-    for (unsigned c : s) {
-        charPtr[c]++;
+
+void get_char_ord(const Span in, Span ord) {
+    std::map<unsigned, unsigned> rankPtr;
+    for (unsigned c : in) {
+        rankPtr[c]++;
+    }
+    unsigned ptr = 0;
+    for (auto &kv : rankPtr) {
+        unsigned nextPtr = kv.second + ptr;
+        kv.second = ptr;
+        ptr = nextPtr;
     }
 
-    unsigned prefixSum = 0;
-    for (auto &kv : charPtr) {
-        unsigned newSum = prefixSum + kv.second;
-        kv.second = prefixSum;
-        prefixSum = newSum;
+    for (unsigned i = 0;i < in.size();i++) {
+        ord[rankPtr[in[i]]++] = i;
+    }
+}
+
+void get_char_rank(const Span in, Span rank) {
+    std::map<unsigned, unsigned> rankMap;
+    for (unsigned c : in) {
+        rankMap[c] = 0;
+    }
+    unsigned ind = 0;
+    for (auto &kv : rankMap) {
+        kv.second = ind++;
+    }
+    for (unsigned i = 0;i < in.size();i++) {
+        rank[i] = rankMap[in[i]];
     }
 
-    std::vector<unsigned> res(s.size());
-    for (unsigned i = 0;i < s.size();i++) {
-        auto it = charPtr.find(s[i]);
-        res[(it->second)++] = i;
-    }
-    return res;
 }
 
 // Return an vector of the indices of the elements in sorted order
@@ -137,33 +214,60 @@ void get_rank(
     }
 }
 
+
 //
 // NlogN
 //
 
-std::vector<unsigned> nlogn_sa(const std::vector<unsigned> &input) {
-    static std::vector<std::array<unsigned, 2>> sortArr;
-    static std::vector<unsigned> rank;
+constexpr unsigned cyclic_prev(unsigned i, unsigned step, unsigned len) {
+    return step > i
+        ? i + len - step
+        : i - step;
+}
 
-    std::vector<unsigned> ord = sort_chars(input);
-    get_rank(input, ord, rank);
+Span nlogn_sa(const Span in) {
+    Span ord = Span::make(in.size());
+    Span rankPtr = Span::make(in.size());
+    Span rank = Span::make(in.size());
+    Span temp = Span::make(in.size());
 
-    for (unsigned stride = 1;stride < input.size();stride *= 2) {
-        //std::cerr << "before stride=" << stride << "\n";
-        //std::cerr << "ind: " << sa.ind << "\n";
-        //std::cerr << "rank: " << rank << "\n";
+    get_char_ord(in, ord);
+    get_char_rank(in, rank);
 
-        sortArr.resize(input.size());
-        for (unsigned i = 0;i < input.size();i++) {
-            unsigned j = i + stride;
-            j = j >= input.size() ? j - input.size() : j;
+    for (unsigned stride = 1;stride < in.size();stride *= 2) {
+        // Compute rank and rankPtr from ord and prev ranks
+        unsigned prevStride = stride / 2;
+        Span newRank = temp;
 
-            sortArr[i][0] = rank[i];
-            sortArr[i][1] = rank[j];
+        unsigned r = 0;
+        rankPtr[0] = 0;
+        newRank[ord[0]] = 0;
+        for (unsigned i = 1;i < ord.size();i++) {
+            unsigned cur = ord[i];
+            unsigned prev = ord[i - 1];
+            if (
+                rank[cur] != rank[prev]
+                || (rank[cur + prevStride]) != rank[prev + prevStride]
+            ) {
+                r++;
+                rankPtr[r] = i;
+            }
+            newRank[ord[i]] = r;
         }
-        radix_sort(sortArr, ord);
-        get_rank(sortArr, ord, rank);
+        temp = rank;
+        rank = newRank;
+
+        Span newOrd = temp;
+        for (unsigned i : ord) {
+            unsigned startI = cyclic_prev(i, stride, in.size());
+            newOrd[rankPtr[rank[startI]]++] = startI;
+        }
+        temp = ord;
+        ord = newOrd;
     }
+    rankPtr.free();
+    rank.free();
+    temp.free();
     return ord;
 }
 
@@ -233,9 +337,9 @@ unsigned get_or_0(const std::vector<unsigned> &v, unsigned i) {
 std::vector<unsigned> linear_sa(const std::vector<unsigned> &v) {
     //std::cerr << "linear_sa on " << v << "\n";
     if (v.size() < 3) {
-        auto ord = naive_sa(v);
+        //auto ord = naive_sa(v);
         //std::cerr << "naive: " << ord << "\n";
-        return ord;
+        //return ord;
     }
 
     std::vector<unsigned> v01_letter_rank = get_v01_letter_rank(v);
@@ -383,21 +487,29 @@ Options parse_args(const std::vector<std::string> &args) {
     return opt;
 }
 
-std::vector<unsigned> read_input() {
-    const unsigned BLOCK_SIZE = 1U << 12;
-    char buff[BLOCK_SIZE];
+Span read_input() {
+    assert(freopen(nullptr, "rb", stdin) != nullptr);
+    assert(fseek(stdin, 0, SEEK_END) == 0);
+    const unsigned inputLen = ftell(stdin);
 
-    std::vector<unsigned> res;
-    while (std::cin) {
-        std::cin.read(buff, BLOCK_SIZE);
-        for (unsigned i = 0;i < std::cin.gcount();i++) {
-            res.push_back(buff[i] + 1);
-        }
+    //TODO directly write into the actual array and shift inside it
+    char *inputBuffer = new char[inputLen];
+    fseek(stdin, 0, SEEK_SET);
+    fread(inputBuffer, 1, inputLen, stdin);
+
+    Span res = Span::make(inputLen + 1);
+    for (unsigned i = 0;i < inputLen;i++) {
+        res[i] = inputBuffer[i] + 1;
     }
-    // Append a lexicographically minimal "$"
-    res.push_back(0);
+    res[inputLen] = 0;
+    delete[] inputBuffer;
 
     return res;
+}
+
+void print_binary_output(const Span sa) {
+    assert(freopen(nullptr, "wb", stdout) != nullptr);
+    fwrite(sa.get_buffer(), sizeof(unsigned), sa.size(), stdout);
 }
 
 int main(int argc, char* argv[]) {
@@ -407,10 +519,11 @@ int main(int argc, char* argv[]) {
     auto args = extract_args(argc, argv);
     Options opt = parse_args(args);
 
-    std::vector<unsigned> input = read_input();
+    Span input = read_input();
 
-    std::vector<unsigned> sa;
+    Span sa;
     for (unsigned i = 0;i < opt.repeatCnt;i++) {
+        sa.free();
         switch(opt.algorithm) {
         case NAIVE:
             sa = naive_sa(input);
@@ -418,12 +531,16 @@ int main(int argc, char* argv[]) {
         case NLOGN:
             sa = nlogn_sa(input);
             break;
+        //case LINEAR:
+        //    sa = linear_sa(input);
+        //    break;
         default:
-            sa = linear_sa(input);
-            break;
             std::cerr << "Algorithm not yet supported\n";
             std::exit(1);
         }
     }
-    std::cout << sa << "\n";
+    //std::cerr << sa << "\n";
+    print_binary_output(sa);
+    sa.free();
+    input.free();
 }
