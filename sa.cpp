@@ -14,8 +14,12 @@ private:
     unsigned len;
 
 public:
-    static Span make(unsigned len) {
-        return Span(new unsigned[len], len);
+    static Span make(unsigned len, unsigned buffer = 0) {
+        unsigned *base = new unsigned[len + buffer];
+        for (unsigned i = 0;i < buffer;i++) {
+            base[i + len] = 0;
+        }
+        return Span(base, len);
     }
 
     Span(unsigned *base = nullptr, unsigned len = 0): base(base), len(len) {}
@@ -27,15 +31,14 @@ public:
         len = 0;
     }
 
-    const unsigned* get_buffer() const {
-        return base;
-    }
+    Span slice(unsigned len, unsigned buffer = 0) {
+        Span result(base, len);
 
-    Span slice(unsigned startI, unsigned endI) {
-        return Span(base + startI, endI - startI);
-    }
-    const Span slice(unsigned startI, unsigned endI) const {
-        return Span(base + startI, endI - startI);
+        for (unsigned i = 0;i < buffer;i++) {
+            base[i + len] = 0;
+        }
+        base += len + buffer;
+        return result;
     }
 
     unsigned& operator[](unsigned i) {
@@ -144,76 +147,7 @@ void get_char_rank(const Span in, Span rank) {
     for (unsigned i = 0;i < in.size();i++) {
         rank[i] = rankMap[in[i]];
     }
-
 }
-
-// Return an vector of the indices of the elements in sorted order
-template <size_t K>
-void radix_sort(
-    const std::vector<std::array<unsigned, K>> &v,
-    std::vector<unsigned> &ord
-) {
-    // (hopefully) reuse memory across function calls
-    static std::vector<unsigned> bPtr;
-    static std::vector<unsigned> newOrd;
-
-    ord.resize(v.size());
-    for (unsigned i = 0;i < v.size();i++) {
-        ord[i] = i;
-    }
-
-    for (unsigned i = K - 1;i < K;i--) {
-        unsigned maxX = 0;
-        for (const auto &x : v) {
-            maxX = std::max(maxX, x[i]);
-        }
-        bPtr.resize(maxX + 1);
-        std::fill(bPtr.begin(), bPtr.end(), 0);
-        for (const auto &x : v) {
-            bPtr[x[i]]++;
-        }
-
-        unsigned prefSum = 0;
-        for (unsigned j = 0;j < bPtr.size();j++) {
-            unsigned newSum = prefSum + bPtr[j];
-            bPtr[j] = prefSum;
-            prefSum = newSum;
-        }
-
-        newOrd.resize(v.size());
-        for (unsigned j = 0;j < ord.size();j++) {
-            unsigned bInd = v[ord[j]][i];
-            //std::cerr << "        " << j << " -> b=" << bInd << "; ind="  << bPtr[bInd] << "\n";
-            newOrd[bPtr[bInd]++] = ord[j];
-        }
-
-        // O(1) because of C++ being smart
-        std::swap(ord, newOrd);
-        //std::cerr << "    ord at i=" << i << ": " << ord << "\n";
-    }
-}
-
-template <typename T>
-void get_rank(
-    const std::vector<T> &v,
-    const std::vector<unsigned> &ord,
-    std::vector<unsigned> &rank
-) {
-    rank.resize(ord.size());
-    if (v.empty()) {
-        return;
-    }
-    rank[0] = 0;
-
-    unsigned r = 0;
-    for (unsigned i = 1;i < ord.size();i++) {
-        if (v[ord[i]] != v[ord[i - 1]]) {
-            r = i;
-        }
-        rank[ord[i]] = r;
-    }
-}
-
 
 //
 // NlogN
@@ -275,140 +209,198 @@ Span nlogn_sa(const Span in) {
 // Linear
 //
 
+void radix_sort(
+    const Span in,
+    const unsigned groupSize,
+    const unsigned maxV,
+    Span ord,
+    Span temp
+) {
+    //TODO switch to transposed order
+    const unsigned n = ord.size();
+    assert(in.size() % groupSize == 0);
+    assert(in.size() == n * groupSize);
+
+    Span bPtr = temp.slice(maxV);
+    Span newOrd = temp.slice(n);
+    if (groupSize % 2 == 1) {
+        std::swap(ord, newOrd);
+    }
+
+    for (unsigned i = 0;i < n;i++) {
+        ord[i] = i;
+    }
+
+    for (unsigned o = groupSize - 1;o < groupSize;o--) {
+        std::fill(bPtr.begin(), bPtr.end(), 0);
+        for (unsigned i = o;i < in.size();i += groupSize) {
+            bPtr[in[i]]++;
+        }
+
+        unsigned prefSum = 0;
+        for (unsigned i = 0;i < bPtr.size();i++) {
+            unsigned newSum = prefSum + bPtr[i];
+            bPtr[i] = prefSum;
+            prefSum = newSum;
+        }
+
+        for (unsigned i = 0;i < ord.size();i++) {
+            unsigned bInd = in[groupSize * ord[i] + o];
+            newOrd[bPtr[bInd]++] = ord[i];
+        }
+        std::swap(ord, newOrd);
+    }
+}
+
 unsigned mod_prefix_cnt(unsigned n, unsigned mod) {
     return n / 3 + (n % 3 > mod);
 }
 
-std::vector<unsigned> get_v01_letter_rank(const std::vector<unsigned> &v) {
-    const unsigned v01_cnt = v.size() - mod_prefix_cnt(v.size(), 2);
-    std::vector<std::array<unsigned, 3>> v01_letters;
-    v01_letters.reserve(v01_cnt);
+void get_01_letter_rank(const Span s, Span rank, Span temp) {
+    const unsigned out_size = s.size() - mod_prefix_cnt(s.size(), 2);
+    Span letters = temp.slice(3 * out_size);
+    Span ord = temp.slice(out_size);
 
-    for (unsigned m = 0;m < 2;m++) {
-        for (unsigned i = m;i < v.size();i += 3) {
-            std::array<unsigned, 3> cur{};
-            for (unsigned j = 0;j < 3;j++) {
-                if (i + j < v.size()) {
-                    cur[j] = v[i + j];
-                }
+    unsigned j = 0;
+    for (unsigned mod = 0;mod < 2;mod++) {
+        for (unsigned i = mod;i < s.size();i += 3){
+            for (unsigned k = 0;k < 3;k++) {
+                letters[j++] = s[i + k];
             }
-            v01_letters.push_back(cur);
         }
     }
-    // Compress letters
-    std::vector<unsigned> v01_letters_ord;
-    radix_sort(v01_letters, v01_letters_ord);
-    std::vector<unsigned> v01_rank;
-    get_rank(v01_letters, v01_letters_ord, v01_rank);
+    radix_sort(letters, 3, s.size(), ord, temp);
 
-    return v01_rank;
+    rank[ord[0]] = 0;
+    unsigned r = 0;
+    unsigned *prev = letters.begin() + 3 * ord[0];
+
+    for (unsigned i = 1;i < ord.size();i++) {
+        unsigned *cur = letters.begin() + 3 * ord[i];
+        for (unsigned j = 0;j < 3;j++) {
+            if (prev[j] != cur[j]) {
+                r++;
+                break;
+            }
+        }
+        rank[ord[i]] = r;
+        prev = cur;
+    }
 }
 
-std::vector<unsigned> get_v2_ord(
-    const std::vector<unsigned> &v,
-    const std::vector<unsigned> &v0_rank
-) {
-    std::vector<std::array<unsigned, 2>> v2_letters;
-    v2_letters.reserve(mod_prefix_cnt(v.size(), 2));
-
-    for (unsigned i = 2;i < v.size();i += 3) {
-        std::array<unsigned, 2> cur{};
-        cur[0] = v[i];
-
-        unsigned j = (i + 1) / 3;
-        if (j < v0_rank.size()) {
-            cur[1] = v0_rank[j];
+void get_01_string_rank(Span ord_01, Span rank_0, Span rank_1) {
+    for (unsigned i = 0;i < ord_01.size();i++) {
+        unsigned j = ord_01[i];
+        if (j < rank_0.size()) {
+            rank_0[j] = i;
+            ord_01[i] = 2 * j;
         } else {
-            cur[1] = 0; // end of string
-        }
-
-        v2_letters.push_back(cur);
-    }
-
-    std::vector<unsigned> v2_ord;
-    radix_sort(v2_letters, v2_ord);
-    return v2_ord;
-}
-
-unsigned get_or_0(const std::vector<unsigned> &v, unsigned i) {
-    return i < v.size() ? v[i] : 0;
-}
-
-std::vector<unsigned> linear_sa(const std::vector<unsigned> &v) {
-    //std::cerr << "linear_sa on " << v << "\n";
-    if (v.size() < 3) {
-        //auto ord = naive_sa(v);
-        //std::cerr << "naive: " << ord << "\n";
-        //return ord;
-    }
-
-    std::vector<unsigned> v01_letter_rank = get_v01_letter_rank(v);
-    std::vector<unsigned> v01_ord = linear_sa(v01_letter_rank);
-
-    std::vector<unsigned> v0_rank(mod_prefix_cnt(v.size(), 0));
-    std::vector<unsigned> v1_rank(mod_prefix_cnt(v.size(), 1));
-    for (unsigned i = 0;i < v01_ord.size();i++) {
-        unsigned j = v01_ord[i];
-        if (j < v0_rank.size()) {
-            v0_rank[j] = i;
-            v01_ord[i] = 3 * j;
-        } else {
-            j -= v0_rank.size();
-            v1_rank[j] = i;
-            v01_ord[i] = 3 * j + 1;
+            j -= rank_0.size();
+            rank_1[j] = i;
+            ord_01[i] = 2 * j + 1;
         }
     }
-    //std::cerr << "v0_rank " << v0_rank << " v1_rank " << v1_rank << "\n";
+}
 
-    std::vector<unsigned> v2_ord = get_v2_ord(v, v0_rank);
-    std::vector<unsigned> v2_rank(v2_ord.size());
-    for (unsigned i = 0;i < v2_ord.size();i++) {
-        v2_rank[v2_ord[i]] = i;
+void get_2_ord(const Span s, const Span rank_0, Span ord, Span temp) {
+    const unsigned out_size = mod_prefix_cnt(s.size(), 2);
+    Span letters = temp.slice(2 * out_size);
+
+    unsigned j = 0;
+    unsigned k = 1;
+    for (unsigned i = 2;i < s.size();i += 3) {
+        letters[j++] = s[i];
+        letters[j++] = rank_0[k++];
     }
 
-    std::vector<unsigned> ord;
-    ord.reserve(v.size());
+    radix_sort(letters, 2, s.size(), ord, temp);
+}
 
-    unsigned v01_i = 0;
-    unsigned v2_i = 0;
-    while ((v01_i < v01_ord.size()) && (v2_i < v2_ord.size())) {
-        unsigned j = v2_ord[v2_i];
-        unsigned i = v01_ord[v01_i] / 3;
+void recursive_linear_sa(const Span s, Span ord, Span stack) {
+    for (unsigned i : s) {
+        assert(i < s.size());
+    }
+    if (s.size() < 3) {
+        for (unsigned i = 0;i < s.size();i++) {
+            ord[i] = s[i];
+        }
+        return;
+    }
+    const unsigned cnt_0 = mod_prefix_cnt(s.size(), 0);
+    const unsigned cnt_1 = mod_prefix_cnt(s.size(), 1);
+    const unsigned cnt_2 = mod_prefix_cnt(s.size(), 2);
+
+    Span letter_rank_01 = stack.slice(cnt_0 + cnt_1, 2);
+    Span ord_01 = stack.slice(cnt_0 + cnt_1);
+
+    get_01_letter_rank(s, letter_rank_01, stack);
+    recursive_linear_sa(letter_rank_01, ord_01, stack);
+
+    Span rank_0 = stack.slice(cnt_0, 1);
+    Span rank_1 = stack.slice(cnt_1, 1);
+    Span ord_2 = stack.slice(cnt_2);
+
+    get_01_string_rank(ord_01, rank_0, rank_1);
+    get_2_ord(s, rank_0, ord_2, stack);
+
+    unsigned *p_01 = ord_01.begin();
+    unsigned *p_2 = ord_2.begin();
+    unsigned *p_ord = ord.begin();
+
+    while ((p_01 != ord_01.end()) && (p_2 != ord_2.end())) {
+        unsigned i_01 = (*p_01) / 2;
+        unsigned i_2 = *p_2;
+
+        unsigned j_01 = i_01 * 3 + (*p_01) % 2;
+        unsigned j_2 = i_2 * 3 + 2;
         bool lt;
 
-        if (v01_ord[v01_i] % 3 == 0) {
-            if (get_or_0(v, 3 * i) != get_or_0(v, 3 * j + 2)) {
-                lt = get_or_0(v, 3 * i) < get_or_0(v, 3 * j + 2);
+        if ((*p_01) % 2 == 0) {
+            if (s[j_01] != s[j_2]) {
+                lt = s[j_01] < s[j_2];
             } else {
-                lt = get_or_0(v1_rank, i) < get_or_0(v0_rank, j + 1);
+                lt = rank_1[i_01] < rank_0[i_2 + 1];
             }
         } else {
-            if (get_or_0(v, 3 * i + 1) != get_or_0(v, 3 * j + 2)) {
-                lt = get_or_0(v, 3 * i + 1) < get_or_0(v, 3 * j + 2);
-            } else if (get_or_0(v, 3 * i + 2) != get_or_0(v, 3 * j + 3)) {
-                lt = get_or_0(v, 3 * i + 2) < get_or_0(v, 3 * j + 3);
+            if (s[j_01] != s[j_2]) {
+                lt = s[j_01] < s[j_2];
+            } else if (s[j_01 + 1] != s[j_2 + 1]) {
+                lt = s[j_01 + 1] < s[j_2 + 1];
             } else {
-                lt = get_or_0(v0_rank, i + 1) < get_or_0(v1_rank, j + 1);
+                lt = rank_0[i_01 + 1] < rank_1[i_2 + 1];
             }
+
         }
+
         if (lt) {
-            ord.push_back(v01_ord[v01_i++]);
+            *(p_ord++) = j_01;
+            p_01++;
         } else {
-            ord.push_back(v2_ord[v2_i++] * 3 + 2);
+            *(p_ord++) = j_2;
+            p_2++;
         }
+
     }
 
-    while (v01_i < v01_ord.size()) {
-        ord.push_back(v01_ord[v01_i++]);
+    for (;p_01 != ord_01.end();p_01++) {
+        *(p_ord++) = (*p_01) / 2 * 3 + (*p_01) % 2;
     }
-
-    while (v2_i < v2_ord.size()) {
-        ord.push_back(v2_ord[v2_i++] * 3 + 2);
+    for (;p_2 != ord_2.end();p_2++) {
+        *(p_ord++) = (*p_2) * 3 + 2;
     }
-    //std::cerr << "done with " << v << ": " << ord << "\n";
-    return ord;
 }
 
+Span linear_sa(const Span rawInput) {
+    Span in = Span::make(rawInput.size(), 2);
+    Span st = Span::make(rawInput.size() * 6 + 5);
+    Span out = Span::make(rawInput.size());
+
+    get_char_rank(rawInput, in);
+    recursive_linear_sa(in, out, st);
+    in.free();
+    st.free();
+    return out;
+}
 
 
 //
@@ -492,7 +484,6 @@ Span read_input() {
     assert(fseek(stdin, 0, SEEK_END) == 0);
     const unsigned inputLen = ftell(stdin);
 
-    //TODO directly write into the actual array and shift inside it
     char *inputBuffer = new char[inputLen];
     fseek(stdin, 0, SEEK_SET);
     fread(inputBuffer, 1, inputLen, stdin);
@@ -509,7 +500,7 @@ Span read_input() {
 
 void print_binary_output(const Span sa) {
     assert(freopen(nullptr, "wb", stdout) != nullptr);
-    fwrite(sa.get_buffer(), sizeof(unsigned), sa.size(), stdout);
+    fwrite(sa.begin(), sizeof(unsigned), sa.size(), stdout);
 }
 
 int main(int argc, char* argv[]) {
@@ -531,9 +522,9 @@ int main(int argc, char* argv[]) {
         case NLOGN:
             sa = nlogn_sa(input);
             break;
-        //case LINEAR:
-        //    sa = linear_sa(input);
-        //    break;
+        case LINEAR:
+            sa = linear_sa(input);
+            break;
         default:
             std::cerr << "Algorithm not yet supported\n";
             std::exit(1);
