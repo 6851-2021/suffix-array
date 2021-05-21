@@ -1,6 +1,6 @@
 # About
 This repository implements and compares different [suffix array][sa-wikipedia]
-construction algorithms
+construction algorithms.
 
 ## Usage
 Build the executable using
@@ -19,7 +19,7 @@ output through `hexdump`.
 ## Algorithms
 - `linear`: The `O(n)` *Difference Cover 3* algorithm proposed by [Kärkkäinen
   and Sanders (2003)][karkainen] ([video lecture][6851-video]).
-- `nlogn`: A simpler `O(n log n)` radix sort algorithm ([tutorial](cp-algo]).
+- `nlogn`: A simpler `O(n log n)` radix sort algorithm ([tutorial][cp-algo]).
 - `naive`: Standard `O(n^2 log n)` comparison sort with `O(n)` string comparison.
 
 
@@ -27,20 +27,18 @@ output through `hexdump`.
 
 ### Inputs
 - `alice.txt` (146K): The text of Alice in Wonderland, Lewis Carroll.
-- `aaaab.txt` (977K): A text of `1 000 000` random characters in which each character is a
+- `aaaab.txt` (977K): A text of `1 000 000` random characters where each character is a
   `b` with probability `1/5000` and an `a` otherwise.
   Generated using `python3 gen-aaab.py`.
 
 ### Results
-
-### Performance
 Each algorithm was executed 10 times to amortize the overhead of I/O.
 The presented slowdown is relative to the execution time of `linear`.
 
 input     | linear     | nlogn        | naive
 ----------|------------|--------------|--------------
-alice.txt | 0.29s (1x) | 0.73s (2.5x) | 0.38s (1.3x)
-aaab.txt  | 1.15s (1x) | 3.19s (2.7x) | >10 minutes
+`alice.txt` | 0.29s (1x) | 0.73s (2.5x) | 0.38s (1.3x)
+`aaab.txt`  | 1.15s (1x) | 3.19s (2.7x) | >10 minutes
 
 ### Analysis
 `naive` can performs well on `alice.txt` because its suffixes have short LCPs
