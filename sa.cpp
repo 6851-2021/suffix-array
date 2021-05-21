@@ -464,7 +464,7 @@ Options parse_args(const std::vector<std::string> &args) {
     Options opt;
 
     if (args.size() < 1 || args.size() > 2) {
-        std::cerr << "Expected betwen 1 and 2 arguments, got " << args.size() << "\n";
+        std::cerr << "Expected between 1 and 2 arguments, got " << args.size() << "\n";
         std::cerr << USAGE;
         std::exit(1);
 
